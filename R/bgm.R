@@ -259,7 +259,9 @@ bgm = function(x,
                beta_bernoulli_beta = 1,
                na.action = c("listwise", "impute"),
                save = FALSE,
-               display_progress = TRUE) {
+               display_progress = TRUE,
+               mala_thresholds_switch = FALSE,
+               mala_interactions_switch = FALSE) {
 
   #Check data input ------------------------------------------------------------
   if(!inherits(x, what = "matrix") && !inherits(x, what = "data.frame"))
@@ -394,6 +396,10 @@ bgm = function(x,
     }
   }
 
+  if(edge_selection == TRUE) {
+    mala = FALSE
+  }
+
   #The Metropolis within Gibbs sampler -----------------------------------------
   out = gibbs_sampler(observations = x,
                       gamma = gamma,
@@ -420,7 +426,9 @@ bgm = function(x,
                       reference_category = reference_category,
                       save = save,
                       display_progress = display_progress,
-                      edge_selection = edge_selection)
+                      edge_selection = edge_selection,
+                      mala_thresholds_switch = mala_thresholds_switch,
+                      mala_interactions_switch = mala_interactions_switch)
 
 
   #Preparing the output --------------------------------------------------------

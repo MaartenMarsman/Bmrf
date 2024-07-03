@@ -2,6 +2,8 @@
 #include <Rcpp.h>
 #include <progress.hpp>
 #include <progress_bar.hpp>
+#include "log_pl_ratio.h"
+#include "mala_gibbs.h"
 using namespace Rcpp;
 
 // ----------------------------------------------------------------------------|
@@ -374,123 +376,6 @@ void metropolis_thresholds_blumecapel(NumericMatrix interactions,
 }
 
 // ----------------------------------------------------------------------------|
-// The log pseudolikelihood ratio [proposed against current] for an interaction
-// ----------------------------------------------------------------------------|
-double log_pseudolikelihood_ratio(NumericMatrix interactions,
-                                  NumericMatrix thresholds,
-                                  IntegerMatrix observations,
-                                  IntegerVector no_categories,
-                                  int no_persons,
-                                  int variable1,
-                                  int variable2,
-                                  double proposed_state,
-                                  double current_state,
-                                  NumericMatrix rest_matrix,
-                                  LogicalVector variable_bool,
-                                  IntegerVector reference_category) {
-  double rest_score, bound;
-  double pseudolikelihood_ratio = 0.0;
-  double denominator_prop, denominator_curr, exponent;
-  int score, obs_score1, obs_score2;
-
-  double delta_state = proposed_state - current_state;
-
-  for(int person = 0; person < no_persons; person++) {
-    obs_score1 = observations(person, variable1);
-    obs_score2 = observations(person, variable2);
-
-    pseudolikelihood_ratio += 2 * obs_score1 * obs_score2 * delta_state;
-
-    //variable 1 log pseudolikelihood ratio
-    rest_score = rest_matrix(person, variable1) -
-      obs_score2 * interactions(variable2, variable1);
-
-    if(rest_score > 0) {
-      bound = no_categories[variable1] * rest_score;
-    } else {
-      bound = 0.0;
-    }
-
-    if(variable_bool[variable1] == true) {
-      //Regular binary or ordinal MRF variable ---------------------------------
-      denominator_prop = std::exp(-bound);
-      denominator_curr = std::exp(-bound);
-      for(int category = 0; category < no_categories[variable1]; category++) {
-        score = category + 1;
-        exponent = thresholds(variable1, category) +
-          score * rest_score -
-          bound;
-        denominator_prop +=
-          std::exp(exponent + score * obs_score2 * proposed_state);
-        denominator_curr +=
-          std::exp(exponent + score * obs_score2 * current_state);
-      }
-    } else {
-      //Blume-Capel ordinal MRF variable ---------------------------------------
-      denominator_prop = 0.0;
-      denominator_curr = 0.0;
-      for(int category = 0; category < no_categories[variable1] + 1; category++) {
-        exponent = thresholds(variable1, 0) * category;
-        exponent += thresholds(variable1, 1) *
-          (category - reference_category[variable1]) *
-          (category - reference_category[variable1]);
-        exponent+= category * rest_score - bound;
-        denominator_prop +=
-          std::exp(exponent + category * obs_score2 * proposed_state);
-        denominator_curr +=
-          std::exp(exponent + category * obs_score2 * current_state);
-      }
-    }
-    pseudolikelihood_ratio -= std::log(denominator_prop);
-    pseudolikelihood_ratio += std::log(denominator_curr);
-
-    //variable 2 log pseudolikelihood ratio
-    rest_score = rest_matrix(person, variable2) -
-      obs_score1 * interactions(variable1, variable2);
-
-    if(rest_score > 0) {
-      bound = no_categories[variable2] * rest_score;
-    } else {
-      bound = 0.0;
-    }
-
-    if(variable_bool[variable2] == true) {
-      //Regular binary or ordinal MRF variable ---------------------------------
-      denominator_prop = std::exp(-bound);
-      denominator_curr = std::exp(-bound);
-      for(int category = 0; category < no_categories[variable2]; category++) {
-        score = category + 1;
-        exponent = thresholds(variable2, category) +
-          score * rest_score -
-          bound;
-        denominator_prop +=
-          std::exp(exponent + score * obs_score1 * proposed_state);
-        denominator_curr +=
-          std::exp(exponent + score * obs_score1 * current_state);
-      }
-    } else {
-      //Blume-Capel ordinal MRF variable ---------------------------------------
-      denominator_prop = 0.0;
-      denominator_curr = 0.0;
-      for(int category = 0; category < no_categories[variable2] + 1; category++) {
-        exponent = thresholds(variable2, 0) * category;
-        exponent += thresholds(variable2, 1) *
-          (category - reference_category[variable2]) *
-          (category - reference_category[variable2]);
-        exponent+=  category * rest_score - bound;
-        denominator_prop +=
-          std::exp(exponent + category * obs_score1 * proposed_state);
-        denominator_curr +=
-          std::exp(exponent + category * obs_score1 * current_state);
-      }
-    }
-    pseudolikelihood_ratio -= std::log(denominator_prop);
-    pseudolikelihood_ratio += std::log(denominator_curr);
-  }
-  return pseudolikelihood_ratio;
-}
-
-// ----------------------------------------------------------------------------|
 // MH algorithm to sample from the full-conditional of the active interaction
 //  parameters for Bayesian edge selection
 // ----------------------------------------------------------------------------|
@@ -689,58 +574,111 @@ List gibbs_step_gm(IntegerMatrix observations,
                    double epsilon_hi,
                    LogicalVector variable_bool,
                    IntegerVector reference_category,
-                   bool edge_selection) {
+                   bool edge_selection,
+                   bool mala_thresholds_switch,
+                   bool mala_interactions_switch,
+                   NumericVector threshold_step_size,
+                   NumericMatrix interactions_step_size) {
 
   if(edge_selection == true) {
     //Between model move (update edge indicators and interaction parameters)
-    metropolis_edge_interaction_pair(interactions,
-                                     thresholds,
-                                     gamma,
-                                     observations,
-                                     no_categories,
-                                     proposal_sd,
-                                     interaction_scale,
-                                     index,
-                                     no_interactions,
-                                     no_persons,
-                                     rest_matrix,
-                                     theta,
-                                     variable_bool,
-                                     reference_category);
+    if(mala_interactions_switch == true) {
+      mala_edge_interaction_pair(interactions,
+                                 thresholds,
+                                 gamma,
+                                 observations,
+                                 no_categories,
+                                 interactions_step_size,
+                                 interaction_scale,
+                                 index,
+                                 no_interactions,
+                                 no_persons,
+                                 rest_matrix,
+                                 theta,
+                                 variable_bool,
+                                 reference_category);
+    } else {
+      metropolis_edge_interaction_pair(interactions,
+                                       thresholds,
+                                       gamma,
+                                       observations,
+                                       no_categories,
+                                       proposal_sd,
+                                       interaction_scale,
+                                       index,
+                                       no_interactions,
+                                       no_persons,
+                                       rest_matrix,
+                                       theta,
+                                       variable_bool,
+                                       reference_category);
+    }
   }
 
   //Within model move (update interaction parameters)
-  metropolis_interactions(interactions,
-                          thresholds,
-                          gamma,
-                          observations,
-                          no_categories,
-                          proposal_sd,
-                          interaction_scale,
-                          no_persons,
-                          no_variables,
-                          rest_matrix,
-                          phi,
-                          target_ar,
-                          t,
-                          epsilon_lo,
-                          epsilon_hi,
-                          variable_bool,
-                          reference_category);
+  if(mala_interactions_switch == true) {
+    mala_interactions(interactions,
+                      thresholds,
+                      observations,
+                      gamma,
+                      no_categories,
+                      rest_matrix,
+                      interaction_scale,
+                      interactions_step_size,
+                      phi,
+                      0.574,
+                      t,
+                      epsilon_lo,
+                      epsilon_hi);
+  } else {
+    metropolis_interactions(interactions,
+                            thresholds,
+                            gamma,
+                            observations,
+                            no_categories,
+                            proposal_sd,
+                            interaction_scale,
+                            no_persons,
+                            no_variables,
+                            rest_matrix,
+                            phi,
+                            target_ar,
+                            t,
+                            epsilon_lo,
+                            epsilon_hi,
+                            variable_bool,
+                            reference_category);
+  }
 
   //Update threshold parameters
   for(int variable = 0; variable < no_variables; variable++) {
     if(variable_bool[variable] == true) {
-      metropolis_thresholds_regular(interactions,
-                                    thresholds,
-                                    observations,
-                                    no_categories,
-                                    n_cat_obs,
-                                    no_persons,
-                                    variable,
-                                    threshold_alpha,
-                                    threshold_beta,
-                                    rest_matrix);
+      if(mala_thresholds_switch == true) {
+        metropolis_thresholds_regular_mala(thresholds,
+                                           variable,
+                                           no_categories,
+                                           n_cat_obs,
+                                           threshold_alpha,
+                                           threshold_beta,
+                                           rest_matrix,
+                                           threshold_step_size,
+                                           phi,
+                                           0.574,
+                                           t,
+                                           epsilon_lo,
+                                           epsilon_hi);
+      } else {
+        metropolis_thresholds_regular(interactions,
+                                      thresholds,
+                                      observations,
+                                      no_categories,
+                                      n_cat_obs,
+                                      no_persons,
+                                      variable,
+                                      threshold_alpha,
+                                      threshold_beta,
+                                      rest_matrix);
+      }
     } else {
       metropolis_thresholds_blumecapel(interactions,
                                        thresholds,
@@ -766,7 +704,9 @@ List gibbs_step_gm(IntegerMatrix observations,
                       Named("interactions") = interactions,
                       Named("thresholds") = thresholds,
                       Named("rest_matrix") = rest_matrix,
-                      Named("proposal_sd") = proposal_sd);
+                      Named("proposal_sd") = proposal_sd,
+                      Named("threshold_step_size") = threshold_step_size,
+                      Named("interactions_step_size") = interactions_step_size);
 }
 
 // ----------------------------------------------------------------------------|
@@ -798,7 +738,9 @@ List gibbs_sampler(IntegerMatrix observations,
                    IntegerVector reference_category,
                    bool save = false,
                    bool display_progress = false,
-                   bool edge_selection = true) {
+                   bool edge_selection = true,
+                   bool mala_thresholds_switch = false,
+                   bool mala_interactions_switch = false) {
   int cntr;
   int no_variables = observations.ncol();
   int no_persons = observations.nrow();
@@ -815,6 +757,11 @@ List gibbs_sampler(IntegerMatrix observations,
   double target_ar = 0.234;
   double epsilon_lo = 1 / no_persons;
   double epsilon_hi = 2.0;
+
+  NumericVector threshold_step_size(no_variables);
+  std::fill(threshold_step_size.begin(), threshold_step_size.end(), 1.0);
+  NumericMatrix interactions_step_size(no_variables, no_variables);
+  std::fill(interactions_step_size.begin(), interactions_step_size.end(), 1.0);
 
   //The resizing based on ``save'' could probably be prettier ------------------
   int nrow = no_variables;
@@ -918,18 +865,24 @@ List gibbs_sampler(IntegerMatrix observations,
                              theta,
                              phi,
                              target_ar,
-                             iteration + 1,
+                             iter,
                              epsilon_lo,
                              epsilon_hi,
                              variable_bool,
                              reference_category,
-                             edge_selection);
+                             edge_selection,
+                             mala_thresholds_switch,
+                             mala_interactions_switch,
+                             threshold_step_size,
+                             interactions_step_size);
 
     IntegerMatrix gamma = out["gamma"];
     NumericMatrix interactions = out["interactions"];
     NumericMatrix thresholds = out["thresholds"];
     NumericMatrix rest_matrix = out["rest_matrix"];
     NumericMatrix proposal_sd = out["proposal_sd"];
+    NumericVector threshold_step_size = out["threshold_step_size"];
+    NumericMatrix interactions_step_size = out["interactions_step_size"];
 
     if(edge_selection == true) {
       if(edge_prior == "Beta-Bernoulli") {
@@ -1019,18 +972,24 @@ List gibbs_sampler(IntegerMatrix observations,
                              theta,
                              phi,
                              target_ar,
-                             iteration + 1,
+                             iter,
                              epsilon_lo,
                              epsilon_hi,
                              variable_bool,
                              reference_category,
-                             edge_selection);
+                             edge_selection,
+                             mala_thresholds_switch,
+                             mala_interactions_switch,
+                             threshold_step_size,
+                             interactions_step_size);
 
     IntegerMatrix gamma = out["gamma"];
     NumericMatrix interactions = out["interactions"];
     NumericMatrix thresholds = out["thresholds"];
     NumericMatrix rest_matrix = out["rest_matrix"];
     NumericMatrix proposal_sd = out["proposal_sd"];
+    NumericVector threshold_step_size = out["threshold_step_size"];
+    NumericMatrix interactions_step_size = out["interactions_step_size"];
 
     if(edge_selection == true) {
       if(edge_prior == "Beta-Bernoulli") {
@@ -1051,7 +1010,6 @@ List gibbs_sampler(IntegerMatrix observations,
         }
       }
     }
-
 
     //Output -------------------------------------------------------------------
     if(save == true) {
@@ -1128,7 +1086,6 @@ List gibbs_sampler(IntegerMatrix observations,
       }
     }
   }
-
 
   if(edge_selection == true) {
     return List::create(Named("gamma") = out_gamma,
